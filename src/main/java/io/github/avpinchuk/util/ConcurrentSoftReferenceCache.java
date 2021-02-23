@@ -274,10 +274,13 @@ public class ConcurrentSoftReferenceCache<K, V> {
                     }
                 }
 
-                removeStale();
-
                 value = mapperFunction.apply(key);
                 if (value != null) {
+                    // remove stale (GC'd) entries only when
+                    // we actually place mapping to the table,
+                    // i.e. when mapping function returns not null
+                    removeStale();
+
                     int c = count;
                     // ensure capacity
                     if (c++ > threshold) {

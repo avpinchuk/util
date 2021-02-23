@@ -30,7 +30,6 @@ import java.util.function.Function;
  * @param <V> the type of cached values
  */
 public class BoundedOptimisticReaderCache<K, V> {
-
     /**
      * The maximum capacity, used if a higher value is implicitly specified
      * by the constructor.
