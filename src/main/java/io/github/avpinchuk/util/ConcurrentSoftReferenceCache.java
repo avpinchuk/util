@@ -19,6 +19,10 @@
  */
 package io.github.avpinchuk.util;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import java.lang.ref.ReferenceQueue;
 import java.lang.ref.SoftReference;
 import java.lang.reflect.Array;
@@ -75,7 +79,9 @@ import java.util.function.Function;
  * @author Doug Lea
  * @author Jason T. Greene
  */
-public class ConcurrentSoftReferenceCache<K, V> {
+public class ConcurrentSoftReferenceCache<K, V> implements Serializable {
+    private static final long serialVersionUID = -1L;
+
     /**
      * The maximum capacity, used if a higher value is implicitly
      * specified by either of the constructors with arguments. MUST
@@ -193,27 +199,31 @@ public class ConcurrentSoftReferenceCache<K, V> {
      * As a guide, all critical volatile reads and writes to the
      * count field are marked in code comments.
      */
-    private static final class Segment<K, V> extends ReentrantLock {
+    private static final class Segment<K, V> extends ReentrantLock implements Serializable {
+        private static final long serialVersionUID = -1L;
+
         /**
          * The per-segment table.
          */
-        private volatile HashEntry<K, V>[] table;
+        private transient volatile HashEntry<K, V>[] table;
 
         /**
          * The collected weak-key reference queue for this segment.
          * This should be (re)initialized whenever table is assigned.
          */
-        private volatile ReferenceQueue<Object> referenceQueue;
+        private transient volatile ReferenceQueue<Object> referenceQueue;
 
         /**
          * The number of elements in this segment's region.
          */
-        private volatile int count;
+        private transient volatile int count;
 
         /**
          * The load factor for the hash table. Even though this value
          * is same for all segments, it is replicated to avoid needing
          * links to outer object.
+         *
+         * @serial
          */
         private final float loadFactor;
 
@@ -221,7 +231,7 @@ public class ConcurrentSoftReferenceCache<K, V> {
          * The table is rehashed when its size exceeds this threshold.
          * (The value of this field is always {@code (int)(capacity * loadFactor)}.
          */
-        private int threshold;
+        private transient int threshold;
 
         public Segment(int initialCapacity, float loadFactor) {
             this.loadFactor = loadFactor;
@@ -561,5 +571,66 @@ public class ConcurrentSoftReferenceCache<K, V> {
         }
         int hash = hash(key.hashCode());
         return segmentFor(hash).computeIfAbsent(key, hash, mappingFunction);
+    }
+
+    /**
+     * Reconstitute the cache instance from a stream (i.e., deserialize it).
+     *
+     * @param in the stream
+     */
+    @SuppressWarnings({"unchecked", "ForLoopReplaceableByForEach"})
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+
+        // Initialize each segment to be minimally sized, and let grow.
+        for (int i = 0; i < segments.length; i++) {
+            segments[i].setTable(new HashEntry[1]);
+        }
+
+        // Read the keys and values, and put the mappings in the table
+        for (;;) {
+            K key = (K) in.readObject();
+            V value = (V) in.readObject();
+            if ( key == null ) {
+                break;
+            }
+            computeIfAbsent(key, k -> value);
+        }
+    }
+
+    /**
+     * Save the state of the cache instance to a stream (i.e., serialize it).
+     *
+     * @param out the stream
+     * @serialData the key (Object) and value (Object)
+     * for each key-value mapping, followed by a null pair.
+     * The key-value mappings are emitted in no particular order.
+     */
+    @SuppressWarnings("ForLoopReplaceableByForEach")
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        out.defaultWriteObject();
+
+        for (int k = 0; k < segments.length; k++) {
+            Segment<K, V> seg = segments[k];
+            seg.lock();
+            try {
+                HashEntry<K, V>[] tab = seg.table;
+                for (int i = 0; i < tab.length; i++) {
+                    for (HashEntry<K, V> e = tab[i]; e != null; e = e.next) {
+                        Map.Entry<K, V> entry = e.get();
+                        if (entry == null) {
+                            // Skip GC'd keys
+                            continue;
+                        }
+                        out.writeObject(entry.getKey());
+                        out.writeObject(entry.getValue());
+                    }
+                }
+            } finally {
+                seg.unlock();
+            }
+        }
+        out.writeObject(null);
+        out.writeObject(null);
     }
 }
