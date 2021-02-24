@@ -314,6 +314,26 @@ public class ConcurrentSoftReferenceCache<K, V> implements Serializable {
             }
         }
 
+        public void evictAll() {
+            if (count != 0) {
+                lock();
+                try {
+                    HashEntry<K, V>[] tab = table;
+                    for (int i = 0; i < tab.length; i++) {
+                        for (HashEntry<K, V> e = tab[i]; e != null; e = e.next) {
+                            e.clear();
+                        }
+                        tab[i] = null;
+                    }
+                    // Replace the reference queue to avoid unnecessary stale cleanups
+                    referenceQueue = new ReferenceQueue<>();
+                    count = 0;  // write-volatile
+                } finally {
+                    unlock();
+                }
+            }
+        }
+
         private V get(K key, int hash) {
             HashEntry<K, V> e = getFirst(hash);
             while (e != null) {
@@ -571,6 +591,16 @@ public class ConcurrentSoftReferenceCache<K, V> implements Serializable {
         }
         int hash = hash(key.hashCode());
         return segmentFor(hash).computeIfAbsent(key, hash, mappingFunction);
+    }
+
+    /**
+     * Removes all of mappings from this cache. The cache will be empty after this call returns.
+     */
+    @SuppressWarnings("ForLoopReplaceableByForEach")
+    public void evictAll() {
+        for (int i = 0; i < segments.length; i++) {
+            segments[i].evictAll();
+        }
     }
 
     /**
