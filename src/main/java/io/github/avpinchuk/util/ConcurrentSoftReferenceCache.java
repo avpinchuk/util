@@ -307,7 +307,7 @@ public class ConcurrentSoftReferenceCache<K, V> {
         private V get(K key, int hash) {
             HashEntry<K, V> e = getFirst(hash);
             while (e != null) {
-                Map.Entry<K, V> entry = e.entryReference.get();
+                Map.Entry<K, V> entry = e.get();
                 if (entry != null && e.hash == hash && key.equals(entry.getKey())) {
                     return entry.getValue();
                 }
@@ -368,7 +368,7 @@ public class ConcurrentSoftReferenceCache<K, V> {
                         // Clone all remaining nodes
                         for (HashEntry<K, V> p = e; p != lastRun; p = p.next) {
                             // Skip GC'd refs
-                            Map.Entry<K, V> entry = p.entryReference.get();
+                            Map.Entry<K, V> entry = p.get();
                             if (entry == null) {
                                 reduce++;
                                 continue;
@@ -386,14 +386,14 @@ public class ConcurrentSoftReferenceCache<K, V> {
 
         @SuppressWarnings("unchecked")
         private void removeStale() {
-            EntryReference<K, V> entryRef;
-            while ((entryRef = (EntryReference<K, V>) referenceQueue.poll()) != null) {
+            HashEntry<K, V> stale;
+            while ((stale = (HashEntry<K, V>) referenceQueue.poll()) != null) {
                 int c = count - 1;
                 HashEntry<K, V>[] tab = table;
-                int index = entryRef.hash & (tab.length - 1);
+                int index = stale.hash & (tab.length - 1);
                 HashEntry<K, V> first = tab[index];
                 HashEntry<K, V> e = first;
-                while (e != null && e.entryReference != entryRef) {
+                while (e != null && e != stale) {
                     e = e.next;
                 }
 
@@ -403,7 +403,7 @@ public class ConcurrentSoftReferenceCache<K, V> {
                     // cloned
                     HashEntry<K, V> newFirst = e.next;
                     for (HashEntry<K, V> p = first; p != e; p = p.next) {
-                        Map.Entry<K, V> entry = p.entryReference.get();
+                        Map.Entry<K, V> entry = p.get();
                         // Skip GC'd entries
                         if (entry == null) {
                             c--;
@@ -421,14 +421,17 @@ public class ConcurrentSoftReferenceCache<K, V> {
     /**
      * A list entry. Note that this is never exported
      * out as a user-visible Map.Entry.
+     *
+     * HotSpot add acquire membar after load from Reference.referent field to prevent
+     * commoning of loads across safepoint since GC can change its value. This guarantee
+     * visibility of cleaning a reference by GC.
      */
-    private static final class HashEntry<K, V> {
-        private final EntryReference<K, V> entryReference;
+    private static final class HashEntry<K, V> extends SoftReference<Map.Entry<K, V>> {
         private final int hash;
         private final HashEntry<K, V> next;
 
         public HashEntry(Map.Entry<K, V> entry, int hash, HashEntry<K, V> next, ReferenceQueue<Object> referenceQueue) {
-            this.entryReference = new EntryReference<>(entry, hash, referenceQueue);
+            super(entry, referenceQueue);
             this.hash = hash;
             this.next = next;
         }
@@ -436,22 +439,6 @@ public class ConcurrentSoftReferenceCache<K, V> {
         @SuppressWarnings("unchecked")
         public static <K, V> HashEntry<K, V>[] newArray(int capacity) {
             return (HashEntry<K, V>[]) Array.newInstance(HashEntry.class, capacity);
-        }
-    }
-
-    /**
-     * A soft-entry reference which stores the key hash needed for reclamation.
-     *
-     * HotSpot add acquire membar after load from Reference.referent field to prevent
-     * commoning of loads across safepoint since GC can change its value. This guarantied
-     * visibility of cleaning a reference by GC.
-     */
-    private static final class EntryReference<K, V> extends SoftReference<Map.Entry<K, V>> {
-        private final int hash;
-
-        public EntryReference(Map.Entry<K, V> entry, int hash, ReferenceQueue<? super Map.Entry<K, V>> referenceQueue) {
-            super(entry, referenceQueue);
-            this.hash = hash;
         }
     }
 
